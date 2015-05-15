@@ -1,4 +1,34 @@
-# os.listdir(path='.')   # Get list of items in the current dir.
+import os
+
+imageExts = {'.jpg', '.cr2', '.gif'}
+mainDict = {}
+
+def CatalogFiles(path):
+    dirContents = os.listdir(path)   # Get list of items in the current dir.
+    for d in dirContents:
+        newPath = os.path.join(path, d)
+        if os.path.isdir(newPath):
+            print("+  " + newPath)
+            CatalogFiles(newPath)
+        else:
+            fileExt = os.path.splitext(d)
+            if len(fileExt) == 2:
+                if fileExt[1].lower() in imageExts:
+                    print(" I " + newPath)
+                    if d not in mainDict:
+                        mainDict[d] = [newPath]
+                    else:
+                        mainDict[d].append(newPath)
+                else:
+                    print("   " + newPath)
+            
+
+CatalogFiles('Data')
+print("\n")
+for fileName, pathList in mainDict.items():
+    print(fileName + "  " + str(len(pathList)))
+    for path in pathList:
+        print("   " + path)
 
 # function doIt(path='.')
 #   dirContents = os.listdir(path)
