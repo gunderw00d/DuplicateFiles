@@ -73,14 +73,14 @@ def ReSortBySize():
 
 
 def PickSingleSrcTarget(pathList):
-    #print(pathList)
-    # pick the best src dir and create a target dir, put into a list.
+    # want a dict of {destPath: [[source, destName], ... ]} for copy locations
+    # so return [destPath, [source, destName]]
+
     cutOffDirs = [ 'photography', 'desktop', 'pictures']
     outputBase = 'E:\\Unique\\Pictures'
         
     bestPathIndex = 0     # TODO
     path = win32api.GetLongPathName(pathList[bestPathIndex])
-    #print(path)
     
     pathComponents = path.split('\\')
     #print(pathComponents)
@@ -90,21 +90,22 @@ def PickSingleSrcTarget(pathList):
         if pathComponents[i].lower() in cutOffDirs:
             cutOffIndex = i
             break
-    #print(i)
+
     if cutOffIndex >= 0:
-        #print(pathComponents[i+1:])
-        foo = functools.reduce(os.path.join, pathComponents[i+1:])
-        foo = os.path.join(outputBase, foo)
-        #print(foo)
-        bar = [path, foo]
-        print(bar)
+        minLenForExtraPath = i + 2    # MAGICK NUMBER -- +1 to convert index to len, + 1 for file name.
+        if len(pathComponents) > minLenForExtraPath:
+            fullDestPath = functools.reduce(os.path.join, pathComponents[i+1:-1])
+            fullDestPath = os.path.join(outputBase, fullDestPath)
+        else:
+            fullDestPath = outputBase
+
+        bar = [fullDestPath, path]
+        #print(bar)
+        return bar
     else:
-        print("  -- no cutoff dir for path: " + path)
+        #print("  -- no cutoff dir for path: " + path)
+        return None
 
-    
-    #subPath = functools.reduce(os.path.join, pathComponents[2:])
-
-    #return []
 
 #fnameSizeDict = {}   # {fileName: {size: list(paths file of that name and size found in) } }    
 # {fileName: [(src -> dest), ...] }
@@ -121,31 +122,112 @@ def PickSingleSrcTarget(pathList):
 
 # find all image files and collect their paths - look for duplicate file names and see if we can figure out what's
 # an actual duplicate vs. a coincidence.
-pathBase=["E:\\2TB_Drive"]#, "E:\\2TB_JanBackup", "E:\\4TB_Backup", "E:\\C_Drive", "E:\\Seagate Dashboard 2.0"]
+pathBase=["E:\\2TB_Drive", "E:\\2TB_JanBackup", "E:\\4TB_Backup", "E:\\C_Drive", "E:\\Seagate Dashboard 2.0"]
 
+filesWithNoCutoffDir = 'Unique\\NoCutoffDir.txt'
+mainCopyLog = 'Unique\\MainLog.txt'
+
+noCutoff_file = open(filesWithNoCutoffDir, 'w')
+mainLog_file = open(mainCopyLog, 'w')
+
+print("looking for pictures...")
 for path in pathBase:
+    print("    checking " + path)
     CatalogFiles(win32api.GetShortPathName(path))
 
 
 count = 0
 for k in mainDict.keys():
     count += len(mainDict[k])
-#print("  " + str(sum))
 
-print(str(len(mainDict.keys())) + " files in " + str(count) + " paths")
+mainLog_file.write(str(len(mainDict.keys())) + " files in " + str(count) + " paths\n")
 
+print("Found " + str(len(mainDict.keys())) + " files in " + str(count) + " paths")
+print("Sorting by file size...")
 ReSortBySize()
 
+# have a dict of {fname: {size: [location, ...]} }
+# want a dict of {destPath: [[source, destName], ... ]} for copy locations
 
-# TODO -- this works on a single entry - scale up to multiple
-fnameList = list(fnameSizeDict.keys())
-sizePathsDict = fnameSizeDict[fnameList[0]]
-pathList = list(sizePathsDict.values())
-PickSingleSrcTarget(pathList[0])
+# for each fname:
+#    for each size:
+#       pick first location & chop back to cutoff point.
+#       if no cutoff path - log and skip
+#
+#       create dest location
+#       if dest in list already:
+#          change dest name and add to list of copy source/destNames
 
-##bar = ['E:\\2TB_DR~1\\SONYBA~1\\HDD1\\ALLUSE~1\\Adobe\\PHOTOS~1\\8.0\\PHOTOC~1\\frames\\CO60DE~1.JPG']
-##PickSingleSrcTarget(bar)
+print("Discovering destinations...")
+copyInfoDict = {}   # {destPath: [[source, destName], ... ]}
+numNoCutoff = 0
+for fname, sizeLocsDict in fnameSizeDict.items():
+    dupCount = 1
+    for sz, locs in sizeLocsDict.items():
+        if len(locs) == 0:
+            # TODO -- log
+            continue
+        retV = PickSingleSrcTarget(locs)
+        if retV == None:
+            noCutoff_file.write("  No cutoff dir in path for: " + fname + "\n")
+            numNoCutoff += 1
+        else:
+            #print(retV)  # [destPath, sourceFullFilePath]
+            destPath = retV[0]
+            srcFullPath = retV[1]
+            destFileName = fname
+            
+            tmpList = copyInfoDict[destPath] = copyInfoDict.get(destPath, list())
+            if len(tmpList) > 0:
+                fileBase, ext = os.path.splitext(destFileName)
+                fileBase = fileBase + ' ' + str(dupCount)
+                dupCount += 1
+                destFileName = fileBase + ext
+            tmpList.append([srcFullPath, destFileName])
 
+
+print("Creating missing destination folders...")
+for dp, srcFnameList in copyInfoDict.items():
+    pathComponents = dp.split('\\')
+    #print(pathComponents)
+    #print('\nChanging to: ' + pathComponents[0] + '\\')
+    os.chdir(pathComponents[0] + '\\')  # first slot should be the drive - have to include the \ to be sure we CD back to the top level dir
+    createdPath = pathComponents[0]
+    for pc in pathComponents[1:]:
+        createdPath = os.path.join(createdPath, pc)
+        if os.path.exists(pc) == False:
+            mainLog_file.write('making directory ' + createdPath + '\n')
+            os.mkdir(pc)
+        #print('  changing to: ' + pc)
+        os.chdir(pc)
+
+os.chdir('E:\\')        # HACK - jump back up to the top level dir
+    
+print("Copying files...")
+
+
+
+Intentionally broken -- fix the note below
+#  Permission denied on a file
+#   Add code to test if dest file exists - if so, skip copy
+#   Should be able to pick up where we left off nicely.
+
+copyCount = 0
+for dp, srcFnameList in copyInfoDict.items():
+    for srcFname in srcFnameList:
+        mainLog_file.write('copy ' + srcFname[0] + ' ' + os.path.join(dp, srcFname[1]) + '\n')
+        shortSrcName = win32api.GetShortPathName(srcFname[0])
+        shortDestName = os.path.join(win32api.GetShortPathName(dp), srcFname[1])
+        shutil.copy2(shortSrcName, shortDestName)
+        copyCount += 1
+        if (copyCount % 100) == 0:
+            print("  Copied " + str(copyCount) + " files")
+
+
+
+noCutoff_file.close()
+mainLog_file.close()
+print("\n\nDONE!\n")
 
 
 # everything with one file size and multiple locations
