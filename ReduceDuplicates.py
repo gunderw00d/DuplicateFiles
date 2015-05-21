@@ -5,7 +5,6 @@ import win32api
 
 imageExts = {'.jpg', '.jpeg', '.cr2', '.nef', '.gif', '.tif', '.tiff', '.png', '.bmp', '.psd', '.ppm'}
 mainDict = {}       # {fileName: list(paths file name found in) }
-#extensions = {}
 extCount = {}
 
 def CatalogFiles(path):
@@ -71,13 +70,13 @@ def ReSortBySize():
         fnameSizeDict[file] = sizes
     #PrintSizeStats()
 
+        
+cutOffDirs = [ 'photography', 'desktop', 'pictures']
+outputBase = 'E:\\Unique\\Pictures'
 
 def PickSingleSrcTarget(pathList):
     # want a dict of {destPath: [[source, destName], ... ]} for copy locations
     # so return [destPath, [source, destName]]
-
-    cutOffDirs = [ 'photography', 'desktop', 'pictures']
-    outputBase = 'E:\\Unique\\Pictures'
         
     bestPathIndex = 0     # TODO
     path = win32api.GetLongPathName(pathList[bestPathIndex])
@@ -106,19 +105,29 @@ def PickSingleSrcTarget(pathList):
         #print("  -- no cutoff dir for path: " + path)
         return None
 
+copiedFiles = {}    # {fileName: [size, path]}
+def FindCopiedFiles(path):
+    if os.path.exists(path):
+        dirContents = os.listdir(path)   # Get list of items in the current dir.
+        for d in dirContents:
+            newPath = win32api.GetShortPathName(os.path.join(path, d))
+            if os.path.isdir(newPath):
+                FindCopiedFiles(newPath)
+            else:
+                sz = -1
+                if os.access(newPath, os.R_OK):
+                    try:
+                        statInfo = os.stat(newPath)
+                        sz = statInfo.st_size
+                    except OSError:
+                        sz = -2
+                copiedFiles[d] = [sz, newPath]
 
-#fnameSizeDict = {}   # {fileName: {size: list(paths file of that name and size found in) } }    
-# {fileName: [(src -> dest), ...] }
-#   only one file size, just pick first path for source.
-#       dest -->  hrmm... where to chop that first path off.
-#       Photography, Desktop, Pictures
 
-#fnameCopyInfo = {}    # { fileName: [ [src, dest], ...] }
-#def GenerateCopyInfo():
-#    for fileName, sizePathsDict in fnameSizeDict:
-#        if len(sizePathsDict.keys()) == 1:
-#            fnameCopyInfo[fileName] = PickSingleSrcTarget(sizePathsDict.keys())
-
+print("Finding already copied files...")
+FindCopiedFiles(outputBase)
+print("  " + str(len(copiedFiles.keys())) + " files found already copied")
+    
 
 # find all image files and collect their paths - look for duplicate file names and see if we can figure out what's
 # an actual duplicate vs. a coincidence.
@@ -126,9 +135,11 @@ pathBase=["E:\\2TB_Drive", "E:\\2TB_JanBackup", "E:\\4TB_Backup", "E:\\C_Drive",
 
 filesWithNoCutoffDir = 'Unique\\NoCutoffDir.txt'
 mainCopyLog = 'Unique\\MainLog.txt'
+errorLog = 'Unique\\ErrorLog.txt'
 
 noCutoff_file = open(filesWithNoCutoffDir, 'w')
 mainLog_file = open(mainCopyLog, 'w')
+errorLog_file = open(errorLog, 'w')
 
 print("looking for pictures...")
 for path in pathBase:
@@ -159,7 +170,7 @@ ReSortBySize()
 #          change dest name and add to list of copy source/destNames
 
 print("Discovering destinations...")
-copyInfoDict = {}   # {destPath: [[source, destName], ... ]}
+copyInfoDict = {}   # {destPath: [[source, destName, sz], ... ]}
 numNoCutoff = 0
 for fname, sizeLocsDict in fnameSizeDict.items():
     dupCount = 1
@@ -183,7 +194,7 @@ for fname, sizeLocsDict in fnameSizeDict.items():
                 fileBase = fileBase + ' ' + str(dupCount)
                 dupCount += 1
                 destFileName = fileBase + ext
-            tmpList.append([srcFullPath, destFileName])
+            tmpList.append([srcFullPath, destFileName, sz])
 
 
 print("Creating missing destination folders...")
@@ -206,81 +217,40 @@ os.chdir('E:\\')        # HACK - jump back up to the top level dir
 print("Copying files...")
 
 
-
-Intentionally broken -- fix the note below
-#  Permission denied on a file
-#   Add code to test if dest file exists - if so, skip copy
-#   Should be able to pick up where we left off nicely.
-
 copyCount = 0
-for dp, srcFnameList in copyInfoDict.items():
-    for srcFname in srcFnameList:
-        mainLog_file.write('copy ' + srcFname[0] + ' ' + os.path.join(dp, srcFname[1]) + '\n')
-        shortSrcName = win32api.GetShortPathName(srcFname[0])
-        shortDestName = os.path.join(win32api.GetShortPathName(dp), srcFname[1])
-        shutil.copy2(shortSrcName, shortDestName)
-        copyCount += 1
-        if (copyCount % 100) == 0:
-            print("  Copied " + str(copyCount) + " files")
+skipCount = 0
+for dp, srcFnameList in copyInfoDict.items():   # {destPath: [[src, destfile, size], ...]
+    for copyInfo in srcFnameList:               # [src, destFile, size] from list of same
+        mainLog_file.write('copy ' + copyInfo[0] + ' ' + os.path.join(dp, copyInfo[1]) + '\n')
+        shortSrcName = win32api.GetShortPathName(copyInfo[0])
+        shortDestName = os.path.join(win32api.GetShortPathName(dp), copyInfo[1])
+        copyData = copiedFiles.get(copyInfo[1], list())   # {fileName: [size, path]}
+        if (len(copyData) == 0) or (copyData[0] != copyInfo[2]):
+            try:
+                shutil.copy2(shortSrcName, shortDestName)
+                copyCount += 1
+                if (copyCount % 100) == 0:
+                    print("  Copied " + str(copyCount) + " files")
+            except (IOError, os.error) as why:
+                errorLog_file.write("Error copying \n")
+                errorLog_file.write("Src (short): " + shortSrcName + "\n")
+                errorLog_file.write("Src (full): " + copyInfo[0] + "\n")
+                errorLog_file.write("Dest (short): " + shortDestName + "\n")
+                errorLog_file.write("Dest (full): " + dp + copyInfo[1] + "\n")
+                print("error copying file")
+        else:
+            skipCount += 1
+            if (skipCount % 100) == 0:
+                print("  Skipped " + str(skipCount) + " files")
+                
+            
+            
+            
 
 
 
 noCutoff_file.close()
 mainLog_file.close()
+errorLog_file.close()
 print("\n\nDONE!\n")
-
-
-# everything with one file size and multiple locations
-#    check locations - all parallel?  copy once to similar folder
-#                      multiple paths? copy to each dissimilar folder and note in log
-#   more than one file size?
-#      a size has more than one path?  same treatment - folders similar, copy once, dissimilar, copy and note
-#      size dest path already exists?  rename and copy to existing location.
-
-#  Maybe stop after 5 file sizes - rest seem to be outliers.  Dump their loc and check manually.
-
-
-
-
-
-#extens = []
-#extens.extend(extensions.keys())
-#extens.sort()
-#for ext in extens:
-#    print(ext)
-
-copyCommands = []
-mkdirsCommands = []
-
-def GenerateCommands():
-    uniqueFileBase='Unique'
-    for fileName, pathList in mainDict.items():
-        newCopies = {}
-        for path in pathList:
-            pathComponents = path.split('\\')
-            subPath = functools.reduce(os.path.join, pathComponents[2:])
-            if subPath not in newCopies.keys():
-                targetLoc = os.path.join(uniqueFileBase, subPath)
-                newCopies[subPath] = [path, targetLoc]
-        copyCommands.extend(newCopies.values())
-
-    # generate a set of mkdir commands off the copy commnads
-    fooBar = {}
-    for cpCmd in copyCommands:
-        prefix, filename = os.path.split(cpCmd[1])
-        if prefix not in fooBar.keys():
-                fooBar[prefix] = 1
-
-    mkdirsCommands.extend(fooBar.keys())
-    mkdirsCommands.sort()
-
-
-def ExecuteCommands():
-    for dirPath in mkdirsCommands:
-        print("os.makedirs('" + dirPath + "')")
-        os.makedirs(dirPath)
-
-    for cpPaths in copyCommands:
-        print("shutil.copy2('" + cpPaths[0] + "', '" + cpPaths[1] + "')")
-        shutil.copy2(cpPaths[0], cpPaths[1])
 
